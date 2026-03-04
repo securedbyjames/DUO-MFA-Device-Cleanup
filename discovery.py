@@ -2,21 +2,18 @@ import requests
 from requests.auth import HTTPBasicAuth
 import csv
 
+# Replace these with your Duo Admin API credentials
 DUO_IKEY = "EXAMPLE_IKEY"
 DUO_SKEY = "EXAMPLE_SKEY"
 DUO_HOST = "api-example.duosecurity.com"
 
-# Example format:
-# DUO_HOST = "api-123456.duosecurity.com"
-
 BASE_URL = f"https://{DUO_HOST}/admin/v1"
 
-# CSV file to store results
+# CSV file where discovery results will be written
 CSV_FILE = "duo_device_discovery.csv"
 
 
-# Retrieve all users
-
+# Retrieve all users from Duo
 def get_users():
 
     url = f"{BASE_URL}/users"
@@ -29,25 +26,27 @@ def get_users():
     return response.json()["response"]
 
 
-# Get user devices
+# Retrieve all phones from Duo
+def get_phones():
 
-def get_user_devices(user_id):
-
-    url = f"{BASE_URL}/users/{user_id}"
+    url = f"{BASE_URL}/phones"
 
     response = requests.get(
         url,
         auth=HTTPBasicAuth(DUO_IKEY, DUO_SKEY)
     )
 
-    return response.json()["response"]["phones"]
+    return response.json()["response"]
 
 
-# Discovery
-
+# Main discovery function
 def run_discovery():
 
     users = get_users()
+    phones = get_phones()
+
+    # Create a mapping of user_id to username
+    user_map = {u["user_id"]: u["username"] for u in users}
 
     with open(CSV_FILE, "w", newline="") as csvfile:
 
@@ -59,24 +58,20 @@ def run_discovery():
             "activated_timestamp"
         ])
 
-        for user in users:
+        for phone in phones:
 
-            username = user["username"]
-            user_id = user["user_id"]
+            phone_id = phone.get("phone_id")
+            activated = phone.get("activated")
 
-            devices = get_user_devices(user_id)
+            owners = phone.get("users", [])
 
-            if not devices:
-                continue
+            for owner in owners:
 
-            for device in devices:
+                user_id = owner.get("user_id")
 
-                phone_id = device.get("phone_id")
-                activated = device.get("activated")
+                username = user_map.get(user_id, "unknown_user")
 
-                print(
-                    f"User: {username} | Device: {phone_id} | Activated: {activated}"
-                )
+                print(f"{username} | {phone_id} | {activated}")
 
                 writer.writerow([
                     username,
@@ -84,7 +79,6 @@ def run_discovery():
                     activated
                 ])
 
-# Run
 
 if __name__ == "__main__":
     run_discovery()
