@@ -1,17 +1,20 @@
 import requests
 from requests.auth import HTTPBasicAuth
 import csv
+from collections import defaultdict
 
+# Replace these values with your Duo API credentials
 DUO_IKEY = "EXAMPLE_IKEY"
 DUO_SKEY = "EXAMPLE_SKEY"
 DUO_HOST = "api-example.duosecurity.com"
 
 BASE_URL = f"https://{DUO_HOST}/admin/v1"
 
+# CSV file where cleanup actions will be recorded
 CSV_FILE = "duo_cleanup_log.csv"
 
-# Retrieve users
 
+# Retrieve all users
 def get_users():
 
     url = f"{BASE_URL}/users"
@@ -23,22 +26,21 @@ def get_users():
 
     return response.json()["response"]
 
-# Get user devices
 
-def get_user_devices(user_id):
+# Retrieve all phones
+def get_phones():
 
-    url = f"{BASE_URL}/users/{user_id}"
+    url = f"{BASE_URL}/phones"
 
     response = requests.get(
         url,
         auth=HTTPBasicAuth(DUO_IKEY, DUO_SKEY)
     )
 
-    return response.json()["response"]["phones"]
+    return response.json()["response"]
 
 
-# Delete device
-
+# Delete a device from Duo
 def delete_device(phone_id):
 
     url = f"{BASE_URL}/phones/{phone_id}"
@@ -51,11 +53,27 @@ def delete_device(phone_id):
     return response.status_code
 
 
-# Cleanup
-
+# Main cleanup process
 def run_cleanup():
 
     users = get_users()
+    phones = get_phones()
+
+    # Map user_id to username
+    user_map = {u["user_id"]: u["username"] for u in users}
+
+    user_devices = defaultdict(list)
+
+    for phone in phones:
+
+        for owner in phone.get("users", []):
+
+            user_id = owner["user_id"]
+
+            user_devices[user_id].append({
+                "phone_id": phone["phone_id"],
+                "activated": phone["activated"]
+            })
 
     with open(CSV_FILE, "w", newline="") as csvfile:
 
@@ -67,45 +85,35 @@ def run_cleanup():
             "removed_device"
         ])
 
-        for user in users:
+        for user_id, devices in user_devices.items():
 
-            username = user["username"]
-            user_id = user["user_id"]
-
-            devices = get_user_devices(user_id)
-
-            # Skip if user only has one device
             if len(devices) <= 1:
                 continue
 
-            # Sort devices newest → oldest
             devices_sorted = sorted(
                 devices,
                 key=lambda x: x["activated"],
                 reverse=True
             )
 
-            newest_device = devices_sorted[0]
-            old_devices = devices_sorted[1:]
+            newest = devices_sorted[0]
 
-            for device in old_devices:
+            for old_device in devices_sorted[1:]:
 
-                phone_id = device["phone_id"]
+                username = user_map.get(user_id)
 
-                print(
-                    f"Removing device {phone_id} for user {username}"
-                )
+                phone_id = old_device["phone_id"]
+
+                print(f"Removing {phone_id} for {username}")
 
                 delete_device(phone_id)
 
                 writer.writerow([
                     username,
-                    newest_device["phone_id"],
+                    newest["phone_id"],
                     phone_id
                 ])
 
-
-# Run
 
 if __name__ == "__main__":
     run_cleanup()
