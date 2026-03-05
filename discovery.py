@@ -1,52 +1,89 @@
-import requests
-from requests.auth import HTTPBasicAuth
+from duo_client import Admin
 import csv
+import os
+from dotenv import load_dotenv
+from datetime import datetime
 
-# Replace these with your Duo Admin API credentials
-DUO_IKEY = "EXAMPLE_IKEY"
-DUO_SKEY = "EXAMPLE_SKEY"
-DUO_HOST = "api-example.duosecurity.com"
+load_dotenv()
 
-BASE_URL = f"https://{DUO_HOST}/admin/v1"
+# DUO CONFIG
 
-# CSV file where discovery results will be written
-CSV_FILE = "duo_device_discovery.csv"
+DUO_IKEY = os.getenv("DUO_IKEY")
+DUO_SKEY = os.getenv("DUO_SKEY")
+DUO_HOST = os.getenv("DUO_HOST")
 
+if not DUO_IKEY or not DUO_SKEY or not DUO_HOST:
+    raise ValueError("Missing Duo API environment variables.")
 
-# Retrieve all users from Duo
-def get_users():
+admin_api = Admin(
+    ikey=DUO_IKEY,
+    skey=DUO_SKEY,
+    host=DUO_HOST
+)
 
-    url = f"{BASE_URL}/users"
+# Create unique CSV
 
-    response = requests.get(
-        url,
-        auth=HTTPBasicAuth(DUO_IKEY, DUO_SKEY)
-    )
-
-    return response.json()["response"]
-
-
-# Retrieve all phones from Duo
-def get_phones():
-
-    url = f"{BASE_URL}/phones"
-
-    response = requests.get(
-        url,
-        auth=HTTPBasicAuth(DUO_IKEY, DUO_SKEY)
-    )
-
-    return response.json()["response"]
+timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+CSV_FILE = f"duo_device_discovery_{timestamp}.csv"
 
 
-# Main discovery function
+# Timestamp formatter
+
+def format_timestamp(ts):
+
+    if not ts:
+        return ""
+
+    return datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S")
+
+
+# Main functions
+
 def run_discovery():
 
-    users = get_users()
-    phones = get_phones()
+    users = admin_api.get_users()
+    phones = admin_api.get_phones()
+    tokens = admin_api.get_tokens()
 
-    # Create a mapping of user_id to username
-    user_map = {u["user_id"]: u["username"] for u in users}
+    # Map Users
+
+    user_map = {u["user_id"]: u for u in users}
+
+    # Map phone to users
+
+    user_phones = {}
+
+    for phone in phones:
+
+        owners = phone.get("users", [])
+
+        for owner in owners:
+
+            user_id = owner.get("user_id")
+
+            if user_id not in user_phones:
+                user_phones[user_id] = []
+
+            user_phones[user_id].append(phone)
+
+    # Map tokens
+
+    user_tokens = {}
+
+    for token in tokens:
+
+        owner = token.get("user")
+
+        if owner:
+
+            user_id = owner.get("user_id")
+
+            if user_id not in user_tokens:
+                user_tokens[user_id] = []
+
+            user_tokens[user_id].append(token)
+
+    # Write CSV
 
     with open(CSV_FILE, "w", newline="") as csvfile:
 
@@ -54,31 +91,86 @@ def run_discovery():
 
         writer.writerow([
             "username",
-            "phone_id",
-            "activated_timestamp"
+            "name",
+            "email",
+            "created",
+            "last_login",
+            "status",
+            "phone_count",
+            "hardware_tokens",
+            "phone1",
+            "phone1_type",
+            "phone2",
+            "phone2_type",
+            "action"
         ])
 
-        for phone in phones:
+        # Processing users
 
-            phone_id = phone.get("phone_id")
-            activated = phone.get("activated")
+        for user_id, phones in user_phones.items():
 
-            owners = phone.get("users", [])
+            user = user_map.get(user_id)
 
-            for owner in owners:
+            if not user:
+                continue
 
-                user_id = owner.get("user_id")
+            phone_count = len(phones)
 
-                username = user_map.get(user_id, "unknown_user")
+            if phone_count < 2:
+                continue
 
-                print(f"{username} | {phone_id} | {activated}")
+            username = user.get("username")
+            name = user.get("realname")
+            email = user.get("email")
+            status = user.get("status")
 
-                writer.writerow([
-                    username,
-                    phone_id,
-                    activated
-                ])
+            created = format_timestamp(user.get("created"))
+            last_login = format_timestamp(user.get("last_login"))
 
+            token_count = len(user_tokens.get(user_id, []))
+
+            # Sort phones by activation (oldest first)
+            phones_sorted = sorted(
+                phones,
+                key=lambda p: p.get("activated", 0)
+            )
+
+            phone1 = phones_sorted[0]   # oldest phone
+            phone2 = phones_sorted[-1]  # newest phone
+
+            phone1_number = phone1.get("number")
+            phone1_type = phone1.get("type")
+
+            phone2_number = phone2.get("number")
+            phone2_type = phone2.get("type")
+
+            # Handle missing phone numbers
+            if not phone1_number:
+                display_number = "NO NUMBER PRESENT"
+            else:
+                display_number = phone1_number
+
+            action = "WILL REMOVE PHONE 1"
+
+            print(f"{username} has {phone_count} phones and {token_count} hardware tokens, WILL REMOVE PHONE 1 {display_number}")
+
+            writer.writerow([
+                username,
+                name,
+                email,
+                created,
+                last_login,
+                status,
+                phone_count,
+                token_count,
+                phone1_number,
+                phone1_type,
+                phone2_number,
+                phone2_type,
+                action
+            ])
+
+# Run 
 
 if __name__ == "__main__":
     run_discovery()
