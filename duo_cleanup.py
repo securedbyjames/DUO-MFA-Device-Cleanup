@@ -7,20 +7,16 @@ from datetime import datetime
 
 load_dotenv()
 
-# =========================
-# CONFIGURATION
-# =========================
+# CONFIG
 
-# TEST_USER = "james.vincent"   # Set to username to test single user
+# TEST_USER = "first.last"   # Set to username to test single user
 TEST_USER = None            # Uncomment to run for ALL users
 
 DRY_RUN = True                # True = preview only (no deletions)
 # DRY_RUN = False             # False = actually remove devices
 
 
-# =========================
 # DUO API SETUP
-# =========================
 
 DUO_IKEY = os.getenv("DUO_IKEY")
 DUO_SKEY = os.getenv("DUO_SKEY")
@@ -32,9 +28,7 @@ admin_api = Admin(
     host=DUO_HOST
 )
 
-# =========================
 # CSV LOG SETUP
-# =========================
 
 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 CSV_FILE = f"duo_device_cleanup_{timestamp}.csv"
@@ -42,7 +36,7 @@ CSV_FILE = f"duo_device_cleanup_{timestamp}.csv"
 
 def cleanup():
 
-    print("\n========== DUO DEVICE CLEANUP ==========\n")
+    print("\n DUO DEVICE CLEANUP \n")
 
     if TEST_USER:
         print(f"Scanning for ONE User -> Only scanning user: {TEST_USER}")
@@ -63,9 +57,7 @@ def cleanup():
 
     devices_to_remove = []
 
-    # =========================
     # SCAN USERS
-    # =========================
 
     for user_id, phones in user_phones.items():
 
@@ -93,9 +85,7 @@ def cleanup():
                 "phone_number": phone.get("number") or "NO NUMBER PRESENT"
             })
 
-    # =========================
     # SHOW PREVIEW
-    # =========================
 
     if not devices_to_remove:
         print("No devices require cleanup.")
@@ -113,9 +103,7 @@ def cleanup():
 
     print(f"\nTotal devices to remove: {len(devices_to_remove)}")
 
-    # =========================
     # CONFIRMATION PROMPT
-    # =========================
 
     confirm = input("\nProceed with removal? (y/n): ")
 
@@ -123,9 +111,7 @@ def cleanup():
         print("\nOperation cancelled.")
         return
 
-    # =========================
     # CSV LOG FILE
-    # =========================
 
     with open(CSV_FILE, "w", newline="") as csvfile:
 
@@ -138,9 +124,7 @@ def cleanup():
             "removal_time"
         ])
 
-        # =========================
         # REMOVE DEVICES
-        # =========================
 
         for index, device in enumerate(devices_to_remove, start=1):
 
