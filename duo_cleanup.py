@@ -1,119 +1,58 @@
-import requests
-from requests.auth import HTTPBasicAuth
-import csv
+from duo_client import Admin
+import os
+from dotenv import load_dotenv
 from collections import defaultdict
 
-# Replace these values with your Duo API credentials
-DUO_IKEY = "EXAMPLE_IKEY"
-DUO_SKEY = "EXAMPLE_SKEY"
-DUO_HOST = "api-example.duosecurity.com"
+load_dotenv()
 
-BASE_URL = f"https://{DUO_HOST}/admin/v1"
+# Load Duo API credentials
+DUO_IKEY = os.getenv("DUO_IKEY")
+DUO_SKEY = os.getenv("DUO_SKEY")
+DUO_HOST = os.getenv("DUO_HOST")
 
-# CSV file where cleanup actions will be recorded
-CSV_FILE = "duo_cleanup_log.csv"
-
-
-# Retrieve all users
-def get_users():
-
-    url = f"{BASE_URL}/users"
-
-    response = requests.get(
-        url,
-        auth=HTTPBasicAuth(DUO_IKEY, DUO_SKEY)
-    )
-
-    return response.json()["response"]
+# Initialize Duo API client
+admin_api = Admin(
+    ikey=DUO_IKEY,
+    skey=DUO_SKEY,
+    host=DUO_HOST
+)
 
 
-# Retrieve all phones
-def get_phones():
+def cleanup():
 
-    url = f"{BASE_URL}/phones"
+    # Retrieve all phones from the Duo tenant
+    phones = admin_api.get_phones()
 
-    response = requests.get(
-        url,
-        auth=HTTPBasicAuth(DUO_IKEY, DUO_SKEY)
-    )
-
-    return response.json()["response"]
-
-
-# Delete a device from Duo
-def delete_device(phone_id):
-
-    url = f"{BASE_URL}/phones/{phone_id}"
-
-    response = requests.delete(
-        url,
-        auth=HTTPBasicAuth(DUO_IKEY, DUO_SKEY)
-    )
-
-    return response.status_code
-
-
-# Main cleanup process
-def run_cleanup():
-
-    users = get_users()
-    phones = get_phones()
-
-    # Map user_id to username
-    user_map = {u["user_id"]: u["username"] for u in users}
-
-    user_devices = defaultdict(list)
+    # Map user_id -> phones
+    user_phones = defaultdict(list)
 
     for phone in phones:
-
         for owner in phone.get("users", []):
+            user_phones[owner["user_id"]].append(phone)
 
-            user_id = owner["user_id"]
+    # Process each user's phones
+    for user_id, phones in user_phones.items():
 
-            user_devices[user_id].append({
-                "phone_id": phone["phone_id"],
-                "activated": phone["activated"]
-            })
+        if len(phones) < 2:
+            continue
 
-    with open(CSV_FILE, "w", newline="") as csvfile:
+        # Sort by activation so oldest devices come first
+        phones_sorted = sorted(phones, key=lambda p: p.get("activated", 0))
 
-        writer = csv.writer(csvfile)
+        # Delete every phone except the newest one
+        phones_to_delete = phones_sorted[:-1]
 
-        writer.writerow([
-            "username",
-            "kept_device",
-            "removed_device"
-        ])
+        for index, phone in enumerate(phones_to_delete, start=1):
 
-        for user_id, devices in user_devices.items():
+            phone_id = phone.get("phone_id")
+            phone_number = phone.get("number") or "NO NUMBER PRESENT"
 
-            if len(devices) <= 1:
-                continue
+            admin_api.delete_phone(phone_id)
 
-            devices_sorted = sorted(
-                devices,
-                key=lambda x: x["activated"],
-                reverse=True
+            print(
+                f"removed phone {index}: {phone_number} | phone id: {phone_id}"
             )
-
-            newest = devices_sorted[0]
-
-            for old_device in devices_sorted[1:]:
-
-                username = user_map.get(user_id)
-
-                phone_id = old_device["phone_id"]
-
-                print(f"Removing {phone_id} for {username}")
-
-                delete_device(phone_id)
-
-                writer.writerow([
-                    username,
-                    newest["phone_id"],
-                    phone_id
-                ])
 
 
 if __name__ == "__main__":
-    run_cleanup()
+    cleanup()
