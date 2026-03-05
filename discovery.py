@@ -3,32 +3,28 @@ import csv
 import os
 from dotenv import load_dotenv
 from datetime import datetime
+from collections import defaultdict
 
 load_dotenv()
 
-# DUO CONFIG
-
+# Load Duo API credentials from .env
 DUO_IKEY = os.getenv("DUO_IKEY")
 DUO_SKEY = os.getenv("DUO_SKEY")
 DUO_HOST = os.getenv("DUO_HOST")
 
-if not DUO_IKEY or not DUO_SKEY or not DUO_HOST:
-    raise ValueError("Missing Duo API environment variables.")
-
+# Initialize Duo Admin API client
 admin_api = Admin(
     ikey=DUO_IKEY,
     skey=DUO_SKEY,
     host=DUO_HOST
 )
 
-# Create unique CSV
-
+# Create unique CSV name so files never overwrite
 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 CSV_FILE = f"duo_device_discovery_{timestamp}.csv"
 
 
-# Timestamp formatter
-
+# Convert Unix timestamps returned by Duo into readable dates
 def format_timestamp(ts):
 
     if not ts:
@@ -37,53 +33,30 @@ def format_timestamp(ts):
     return datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S")
 
 
-# Main functions
-
 def run_discovery():
 
+    # Pull full datasets from Duo
     users = admin_api.get_users()
     phones = admin_api.get_phones()
     tokens = admin_api.get_tokens()
 
-    # Map Users
-
+    # Map user_id -> user object for fast lookups
     user_map = {u["user_id"]: u for u in users}
 
-    # Map phone to users
+    # Dictionaries mapping users to their phones/tokens
+    user_phones = defaultdict(list)
+    user_tokens = defaultdict(list)
 
-    user_phones = {}
-
+    # Attach phones to users
     for phone in phones:
+        for owner in phone.get("users", []):
+            user_phones[owner["user_id"]].append(phone)
 
-        owners = phone.get("users", [])
-
-        for owner in owners:
-
-            user_id = owner.get("user_id")
-
-            if user_id not in user_phones:
-                user_phones[user_id] = []
-
-            user_phones[user_id].append(phone)
-
-    # Map tokens
-
-    user_tokens = {}
-
+    # Attach hardware tokens to users
     for token in tokens:
-
         owner = token.get("user")
-
         if owner:
-
-            user_id = owner.get("user_id")
-
-            if user_id not in user_tokens:
-                user_tokens[user_id] = []
-
-            user_tokens[user_id].append(token)
-
-    # Write CSV
+            user_tokens[owner["user_id"]].append(token)
 
     with open(CSV_FILE, "w", newline="") as csvfile:
 
@@ -98,61 +71,52 @@ def run_discovery():
             "status",
             "phone_count",
             "hardware_tokens",
-            "phone1",
-            "phone1_type",
-            "phone2",
-            "phone2_type",
-            "action"
+            "removal_plan"
         ])
 
-        # Processing users
-
+        # Process users that have phones
         for user_id, phones in user_phones.items():
 
-            user = user_map.get(user_id)
+            if len(phones) < 2:
+                continue
 
+            user = user_map.get(user_id)
             if not user:
                 continue
 
-            phone_count = len(phones)
-
-            if phone_count < 2:
-                continue
-
-            username = user.get("username")
-            name = user.get("realname")
-            email = user.get("email")
-            status = user.get("status")
+            username = user["username"]
+            name = f"{user.get('firstname','')} {user.get('lastname','')}".strip()
+            email = user.get("email") or ""
+            status = user["status"]
 
             created = format_timestamp(user.get("created"))
             last_login = format_timestamp(user.get("last_login"))
 
-            token_count = len(user_tokens.get(user_id, []))
+            token_count = len(user_tokens[user_id])
 
-            # Sort phones by activation (oldest first)
-            phones_sorted = sorted(
-                phones,
-                key=lambda p: p.get("activated", 0)
+            # Sort phones so oldest devices appear first
+            phones_sorted = sorted(phones, key=lambda p: p.get("activated", 0))
+
+            # Keep newest phone
+            phones_to_remove = phones_sorted[:-1]
+
+            removal_messages = []
+
+            # Build list of devices that will be removed
+            for index, phone in enumerate(phones_to_remove, start=1):
+
+                phone_number = phone.get("number") or "NO NUMBER PRESENT"
+                phone_id = phone.get("phone_id")
+
+                removal_messages.append(
+                    f"will remove phone {index}: {phone_number} | phone id: {phone_id}"
+                )
+
+            removal_message = ", ".join(removal_messages)
+
+            print(
+                f"{username} has {len(phones)} phones and {token_count} hardware tokens. {removal_message}"
             )
-
-            phone1 = phones_sorted[0]   # oldest phone
-            phone2 = phones_sorted[-1]  # newest phone
-
-            phone1_number = phone1.get("number")
-            phone1_type = phone1.get("type")
-
-            phone2_number = phone2.get("number")
-            phone2_type = phone2.get("type")
-
-            # Handle missing phone numbers
-            if not phone1_number:
-                display_number = "NO NUMBER PRESENT"
-            else:
-                display_number = phone1_number
-
-            action = "WILL REMOVE PHONE 1"
-
-            print(f"{username} has {phone_count} phones and {token_count} hardware tokens, WILL REMOVE PHONE 1 {display_number}")
 
             writer.writerow([
                 username,
@@ -161,16 +125,11 @@ def run_discovery():
                 created,
                 last_login,
                 status,
-                phone_count,
+                len(phones),
                 token_count,
-                phone1_number,
-                phone1_type,
-                phone2_number,
-                phone2_type,
-                action
+                removal_message
             ])
 
-# Run 
-
+# Run
 if __name__ == "__main__":
     run_discovery()
